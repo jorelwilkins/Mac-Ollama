@@ -1,0 +1,70 @@
+# PowerShell script for Ollama + Stable Diffusion setup on Windows
+
+# --- Step 1: Check for Python 3.9+ ---
+$pythonVersion = python --version 2>&1
+if ($pythonVersion -match "Python 3\.[9-9]") {
+    Write-Host "Python 3.9+ detected: $pythonVersion"
+} else {
+    Write-Host "Python 3.9+ required. Install from https://www.python.org/downloads/windows/"
+    exit
+}
+
+# --- Step 2: Create virtual environment ---
+python -m venv "$env:USERPROFILE\ollama_env"
+& "$env:USERPROFILE\ollama_env\Scripts\Activate.ps1"
+
+# --- Step 3: Upgrade pip ---
+pip install --upgrade pip setuptools wheel
+
+# --- Step 4: Install packages ---
+pip install diffusers transformers accelerate safetensors torch torchvision torchaudio cpuonly
+pip install langchain-ollama langchain-community yfinance requests
+
+# --- Step 5: Pull Ollama model ---
+Write-Host "Ensure Ollama is installed on Windows: https://ollama.com"
+$MODEL_NAME = Read-Host "Enter model to pull (llama3:8b / llama3:70b)"
+ollama pull $MODEL_NAME
+
+# --- Step 6: Create Python script for image generation ---
+$scriptPath = "$env:USERPROFILE\ollama_env\ollama_image_agent_windows.py"
+@"
+import os
+from langchain_ollama import ChatOllama
+from diffusers import StableDiffusionPipeline
+import torch
+
+IMAGE_FOLDER = os.path.join(os.path.expanduser('~'), 'ollama_env', 'generated_images')
+os.makedirs(IMAGE_FOLDER, exist_ok=True)
+
+MODEL_NAME = 'llama3-70b'
+llm = ChatOllama(model=MODEL_NAME)
+
+print('Loading Stable Diffusion...')
+pipe = StableDiffusionPipeline.from_pretrained('runwayml/stable-diffusion-v1-5')
+pipe = pipe.to('cpu')
+
+print('Ollama Image Agent — type "exit" to quit')
+while True:
+    user_input = input('You: ').strip()
+    if user_input.lower() in ['exit','quit']:
+        break
+    variations_input = input('How many variations? (1-5, default 1): ').strip()
+    try:
+        variations = int(variations_input) if variations_input else 1
+        variations = max(1, min(variations, 5))
+    except:
+        variations = 1
+    prompt_request = f'Generate a detailed text prompt for image generation: {user_input}'
+    image_prompt = llm.invoke(prompt_request).content.strip()
+    print(f'Ollama Prompt: {image_prompt}')
+    for i in range(variations):
+        img = pipe(image_prompt).images[0]
+        safe_name = user_input.replace(' ', '_')[:40]
+        fname = os.path.join(IMAGE_FOLDER, f'{safe_name}_var{i+1}.png')
+        img.save(fname)
+        print(f'Image saved: {fname}')
+"@ | Out-File -Encoding UTF8 $scriptPath
+
+Write-Host "`nSetup complete! Run the agent with:"
+Write-Host "`t& $env:USERPROFILE\ollama_env\Scripts\Activate.ps1"
+Write-Host "`tpython $scriptPath"
